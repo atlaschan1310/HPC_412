@@ -7,25 +7,28 @@
 #include "blitz/array.h"
 #include <iostream>
 
-template<typename T, int N>
-class myArray {
-private:
-    blitz::Array<T,N> data;
-public:
-    myArray(blitz::Array<T, N>& _data) : data(_data) {};
-    ~myArray() {};
-    friend std::ostream& operator<<(std::ostream& os, const myArray<T, N>& data) {
-        os << "data" << std::endl;
-        return os;
-    };
-};
+typedef typename blitz::Array<float, 3> data_Type;
+
+std::ostream& operator<<(std::ostream& os, const data_Type& data) {
+    os << "3-Dimensional Data" << std::endl;
+    os << data.ubound(0) + 1 << "x" << data.ubound(1) + 1 << "x" << data.ubound(2) + 1 << std::endl;
+    for (int i = data.lbound(2); i <= data.ubound(2); i++) {
+        for (int j = data.lbound(0); j <= data.ubound(0); j++) {
+            for (int k = data.lbound(1); k <= data.ubound(1); k++) {
+                os << data(j,k,i);
+                if (k < data.ubound(1)) os << ",";
+            }
+            os << '\n';
+        }
+        os << "-------------" << std::endl;
+    }
+    return os;
+}
 
 int main(int argc, const char * argv[]) {
-    blitz::Array<float, 2> data(2,2);
-    myArray<float, 2> array(data);
-    std::cout << array << std::endl;
+    data_Type data(10,8,6);
     std::cout << data << std::endl;
-    std::cout << "data" << std::endl;
     return 0;
 }
+
 
