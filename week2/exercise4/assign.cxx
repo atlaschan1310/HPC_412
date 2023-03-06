@@ -44,7 +44,7 @@ int main(int argc, char *argv[]) {
     int i = x * nGrid;
     int j = y * nGrid;
     int k = z * nGrid;
-    grid(i,j,k)++;
+    grid(i,j,k)+= 1.0;
 
 	// Convert x, y and z into a grid position i,j,k such that
 	// 0 <= i < nGrid
