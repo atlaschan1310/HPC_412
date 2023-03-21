@@ -14,6 +14,7 @@
 #include <memory>
 #include <cstring>
 #include <cassert>
+#include "blitz/array.h"
 
 namespace baseio {
 inline void swap(uint64_t &value) {
@@ -152,12 +153,12 @@ public: // Provide some stream status functions
     using std::ifstream::bad;
     
 public:
-    /*
+    
     template<typename typeR=float>
     using rarray1 = blitz::Array<typeR,1>;
     template<typename typeR=float>
     using rarray2 = blitz::Array<typeR,2>;
-     */
+    
 protected:
     static constexpr size_t buffer_size = 1024*1024;
     std::unique_ptr<char[]> buffer;
@@ -182,7 +183,7 @@ public:
     void open (const        char* filename,  std::ios_base::openmode mode = std::ios_base::in);
     void open (const std::string& filename,  std::ios_base::openmode mode = std::ios_base::in);
     uint64_t count() const { return nSph + nDark + nStar; }
-    /*
+    
     template<typename typeR=float,typename typeV=typeR,typename typeM=typeV>
     void load(rarray1<typeR> &x,rarray1<typeR> &y,rarray1<typeR> &z) {
         using blitz::firstRank;
@@ -255,7 +256,7 @@ public:
         rarray1<typeR> z = r(Range::all(),2);
         load(x,y,z);
         }
-*/
+
     void load(tipsyio::coordType* r, std::uint64_t N) {
         assert(N == nSph + nDark + nStar);
         uint64_t i = 0;
