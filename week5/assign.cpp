@@ -143,15 +143,6 @@ int main(int argc, char *argv[]) {
     
     float blitzSum = blitz::sum(grid);
     printf("totalSum = %f\n", blitzSum);
-    double t = 0.0;
-    for (int i = 0; i < nGrid; i++) {
-	    for (int j = 0; j < nGrid; j++) {
-			    for (int k = 0; k < nGrid; k++) {
-				    t += grid(i, j, k);
-				}
-		}
-	}
-    printf("t = %f\n",t);
     assert(blitzSum == (nGrid * nGrid * nGrid));
     
     M2fType projected(nGrid, nGrid);

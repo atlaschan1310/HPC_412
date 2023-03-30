@@ -64,7 +64,7 @@ inline int pcs_weights(float x, float *W) {
     return i;
 }
 
-int verify(int i, float *W,int iExpected, int iOrder, ...) {
+inline int verify(int i, float *W,int iExpected, int iOrder, ...) {
     std::va_list args;
     va_start(args, iOrder);
     if (i != iExpected) {
@@ -81,7 +81,7 @@ int verify(int i, float *W,int iExpected, int iOrder, ...) {
     return 0;
 }
 
-bool unit_Test() {
+inline bool unit_Test() {
     int nBAD = 0;
     int i;
     float W[4];
