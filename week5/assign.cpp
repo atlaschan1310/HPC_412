@@ -69,30 +69,7 @@ int main(int argc, char *argv[]) {
         std::cerr << "Unable to open tipsy file " << argv[1] << std::endl;
         return errno;
     }
-    
-    
-    /*
-    int nGrid = 100;
-    int massOption = 3;
-    const char* fileName = "/Users/yangqian/Documents/UZHCS/AdvancedHighPerformanceComputing/B100.00100";
-    void (*assignMass) (float, float, float, int, M3fType&);
-    if (massOption == 0) {
-        printf("Nearest Grid Point.\n");
-        assignMass = &NGP;
-    }
-    else if (massOption == 1) {
-        printf("Cloud in Cell.\n");
-        assignMass = &CIC;
-    }
-    else if(massOption == 2) {
-        printf("Triangle Shaped Cloud.\n");
-        assignMass = &TSC;
-    }
-    else if (massOption == 3) {
-        printf("Piecewise Cubic Spline.\n");
-        assignMass = &PCS;
-    }
-    */
+
     if (unit_Test()) printf("Test passed.\n");
     std::uint64_t N = io.count();
 
@@ -111,7 +88,6 @@ int main(int argc, char *argv[]) {
     grid = 0.0;
     
     start = std::chrono::system_clock::now();
-   //double total = 0.0;
 #pragma omp parallel
 {
 #pragma omp for
@@ -129,10 +105,6 @@ int main(int argc, char *argv[]) {
         assert(y >= 0 && y < nGrid);
         assert(z >= 0 && z < nGrid);
         assignMass(x, y, z, nGrid, grid);
-/*
-#pragma omp atomic 
-	total += PCS_return(x, y, z, nGrid, grid);
-*/
     }
     
 }
