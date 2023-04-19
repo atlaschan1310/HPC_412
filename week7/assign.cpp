@@ -105,7 +105,7 @@ int main(int argc, char *argv[]) {
     float* datawPadding = new (std::align_val_t(64)) float[nGrid * nGrid * (nGrid + 2)];
     M3fType gridwPadding(datawPadding, blitz::shape(nGrid, nGrid, nGrid+2), blitz::neverDeleteData);
     gridwPadding = 0.0;
-    M3fType grid = gridwPadding(blitz::Range::all(), blitz::Range::all(), blitz::Range(0, nGrid));
+    M3fType grid = gridwPadding(blitz::Range::all(), blitz::Range::all(), blitz::Range(0, nGrid-1));
     
     std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
     M3cType kGrid(dataComplex, blitz::shape(nGrid, nGrid, nGrid / 2 + 1));
@@ -162,7 +162,7 @@ int main(int argc, char *argv[]) {
     	printf("average_density = %f\n", average_density);
     	grid -= average_density;
     	grid /= average_density;
-	
+	printf("overall_density = %f\n", blitz::sum(grid));
         start = std::chrono::system_clock::now();
    	fftwf_plan plan = fftwf_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, (fftwf_complex *)dataComplex, FFTW_ESTIMATE);
         fftwf_execute(plan);
