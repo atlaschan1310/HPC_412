@@ -37,8 +37,8 @@ void outPut(const char*, int, const M2fType&);
 void func();
 float PCS_return(float, float, float, int, M3fType&);
 
-void swapCoord(coord_Type*, unsigned long, unsigned long);
-unsigned long partition(coord_Type*, unsigned long, unsigned long, int, int);
+void swapCoord(coord_Type*, int, int);
+int partition(coord_Type*, int, int, int, int);
 
 void LinearBinning(int, const M3cType&);
 void VariableBinning(int, int, const M3cType&);
@@ -105,89 +105,87 @@ int main(int argc, char *argv[]) {
 
     // Load particle positions
     std::cerr << "Total " << N << " particles" << std::endl;
-    unsigned long nPer = (N + size - 1) / size;
+    int nPer = (N + size - 1) / size;
     if (static_cast<unsigned long>(size) >= (nPer + N % size)) nPer--;
-    unsigned long iStart = my_rank * nPer;
-    unsigned long iEnd = (my_rank == size - 1) ? N : (my_rank + 1) * nPer;
+    int iStart = my_rank * nPer;
+    int iEnd = (my_rank == size - 1) ? N : (my_rank + 1) * nPer;
     assert(iStart < N);
     assert(iEnd <= N);
     
-    printf("rank:%d, range:(%lu, %lu)\n", my_rank, iStart, iEnd);
+    printf("rank:%d, range:(%d, %d)\n", my_rank, iStart, iEnd);
     M2fType r(blitz::Range(iStart, iEnd - 1), blitz::Range(0,2));
     timePointType start = std::chrono::system_clock::now();
     io.load(r);
     timePointType end = std::chrono::system_clock::now();
     durationType duration = end - start;
     printf("Reading file took: %.8f s\n", duration);
-
+    
     coord_Type* coord = reinterpret_cast<coord_Type*>(r.data());
-    unsigned long* cutPoints = new unsigned long[size+1];
+    
+    int* cutPoints = new int[size+1];
     cutPoints[0] = 0;
     cutPoints[size] = iEnd - iStart;
-    unsigned long curStart = 0;
+    int curStart = 0;
+    
     for (int i = 1; i < size; i++) {
-        unsigned long cutPoint = partition(coord, curStart, iEnd - iStart, COMM_SLAB_START[i], nGrid);
-        curStart = cutPoint;
-        cutPoints[i] = cutPoint;
+           int cutPoint = partition(coord, curStart, iEnd - iStart, COMM_SLAB_START[i], nGrid);
+           curStart = cutPoint;
+           cutPoints[i] = cutPoint;
     }
-    for (int i = 1; i < size; i++) {
-        assert(cutPoints[i-1] < cutPoints[i]);
-	}
 
+    
+    for (int i = 1; i < size + 1; i++) {
+        assert(cutPoints[i-1] <= cutPoints[i]);
+	}
+   
 
     curStart = 0;
     for (int i = 1; i < size; i++) {
-        unsigned long cutPoint = cutPoints[i];
-        //printf("slab %d starts at %lu\n", COMM_SLAB_START[i], cutPoint);
-        for (unsigned long s = 0; s < cutPoint; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) < COMM_SLAB_START[i]);
-        for (unsigned long s = cutPoint; s < iEnd - iStart; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) >= COMM_SLAB_START[i]);
+        int cutPoint = cutPoints[i];
+        //printf("slab %d starts at %d\n", COMM_SLAB_START[i], cutPoint);
+        for (int s = 0; s < cutPoint; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) < COMM_SLAB_START[i]);
+        for (int s = cutPoint; s < iEnd - iStart; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) >= COMM_SLAB_START[i]);
     }
-
-    unsigned long* num_Particles_toSend = new unsigned long[size];
-    unsigned long* num_Particles_toRecv = new unsigned long[size];
+    
+    int* num_Particles_toSend = new int[size];
+    int* num_Particles_toRecv = new int[size];
     for (int i = 0; i < size; i++) num_Particles_toSend[i] = cutPoints[i+1] - cutPoints[i];
    
-    unsigned long res = 0;
+    int res = 0;
     for (int i = 0; i < size; i++) res += num_Particles_toSend[i];
     assert(res == (iEnd - iStart));
-
     /*
     printf("rank%d sent:", my_rank);
     for (int i = 0; i < size; i++) {
-        printf(" %lu,", num_Particles_toSend[i]);
+        printf(" %d,", num_Particles_toSend[i]);
         }
     printf("\n");
     */
-    MPI_Alltoall(num_Particles_toSend, 1, MPI_UNSIGNED_LONG, num_Particles_toRecv, 1, MPI_UNSIGNED_LONG, MPI_COMM_WORLD);
+    MPI_Alltoall(num_Particles_toSend, 1, MPI_INT, num_Particles_toRecv, 1, MPI_INT, MPI_COMM_WORLD);
     /*
     printf("rank%d received:", my_rank);
     for (int i = 0; i < size; i++) {
-	printf(" %lu,", num_Particles_toRecv[i]);
+	printf(" %d,", num_Particles_toRecv[i]);
 	}
     printf("\n");
     */
 
-    unsigned long new_num_Particle = 0;
+    int new_num_Particle = 0;
     for (int i = 0; i < size; i++) new_num_Particle += num_Particles_toRecv[i];
     
-    unsigned long newSumCheck;
+    int newSumCheck;
     MPI_Allreduce(&new_num_Particle, &newSumCheck, 1, MPI_UNSIGNED_LONG, MPI_SUM, MPI_COMM_WORLD);
     assert(newSumCheck == N);
-    printf("new Sum assertation done.\n");
-
-
-    
-    
     
     
     float* sorted_Particles = new float[new_num_Particle * 3];
     int* MPISendCount = new int[size];
     int* MPIRecvCount = new int[size];
     for (int i = 0; i < size; i++) {
-	MPISendCount[i] = static_cast<int>(num_Particles_toSend[i] * 3);
-	MPIRecvCount[i] = static_cast<int>(num_Particles_toRecv[i] * 3);
-	assert(MPISendCount[i] > 0);
-	assert(MPIRecvCount[i] > 0);
+	MPISendCount[i] = (num_Particles_toSend[i] * 3);
+	MPIRecvCount[i] = (num_Particles_toRecv[i] * 3);
+	assert(MPISendCount[i] >= 0);
+	assert(MPIRecvCount[i] >= 0);
 	}
     
     int* MPISendoffset = new int[size];
@@ -199,7 +197,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    /*  
+    /*
     printf("rank%d sendCount: ", my_rank);
     for (int i = 0; i < size; i++) printf("%d, ", MPISendCount[i]);
     printf("\n rank%d  sendoffset: ", my_rank);
@@ -228,10 +226,10 @@ int main(int argc, char *argv[]) {
 	    assert(curSlab >= COMM_SLAB_START[my_rank]);
     }
     printf("rank%d has %lu sorted particles ready for mass assignment\n", my_rank, new_num_Particle);   
+    
 
 
-
-   /* 
+    /*
     float* datawPadding = new (std::align_val_t(64)) float[nGrid * nGrid * (nGrid + 2)];
     M3fType gridwPadding(datawPadding, blitz::shape(nGrid, nGrid, nGrid+2), blitz::neverDeleteData);
     gridwPadding = 0.0;
@@ -601,7 +599,7 @@ void LogBinning(int nGrid, int nBins, const M3cType& kGrid) {
 }
 
 
-void swapCoord(coord_Type* data, unsigned long i, unsigned long j) {
+void swapCoord(coord_Type* data, int i, int j) {
     coord_Type tmp;
     tmp[0] = data[i][0];
     tmp[1] = data[i][1];
@@ -616,11 +614,10 @@ void swapCoord(coord_Type* data, unsigned long i, unsigned long j) {
     data[j][2] = tmp[2];
 }
 
-
-unsigned long partition(coord_Type* data, unsigned long leftIndex, unsigned long rightIndex, int slabIndex, int nGrid) {
+int partition(coord_Type* data, int leftIndex, int rightIndex, int slabIndex, int nGrid) {
     auto coord2Slab = [] (float x, int nGrid) -> int {return std::floor((x + 0.5) * nGrid);};
-    unsigned long i = leftIndex;
-    unsigned long j = rightIndex - 1;
+    int i = leftIndex;
+    int j = rightIndex - 1;
 
     while (i <= j) {
         if (coord2Slab(data[i][0], nGrid) < slabIndex) ++i;
@@ -630,7 +627,6 @@ unsigned long partition(coord_Type* data, unsigned long leftIndex, unsigned long
       if (coord2Slab(data[j][0], nGrid) >= slabIndex) --j;
       else break;
     }
-
     if (i < j) {
         swapCoord(data, i, j);
         while (1) {
