@@ -81,6 +81,7 @@ int main(int argc, char *argv[]) {
     ptrdiff_t alloc_local, slab_size, slab_start_index;
     fftw_mpi_init();
     alloc_local = fftw_mpi_local_size_3d(nGrid, nGrid, nGrid, MPI_COMM_WORLD, &slab_size, &slab_start_index);
+    assert(slab_size > 0);
     printf("Rank%d: slab_size = %d, slab starts at %d\n", my_rank, slab_size, slab_start_index);
     int* COMM_SLAB_SIZE = new int [size];
     int* COMM_SLAB_START = new int [size];
@@ -124,14 +125,18 @@ int main(int argc, char *argv[]) {
     cutPoints[0] = 0;
     cutPoints[size] = iEnd - iStart;
     unsigned long curStart = 0;
-    for (int i = 1; i < 8; i++) {
+    for (int i = 1; i < size; i++) {
         unsigned long cutPoint = partition(coord, curStart, iEnd - iStart, COMM_SLAB_START[i], nGrid);
         curStart = cutPoint;
         cutPoints[i] = cutPoint;
     }
+    for (int i = 1; i < size; i++) {
+        assert(cutPoints[i-1] < cutPoints[i]);
+	}
+
 
     curStart = 0;
-    for (int i = 1; i < 8; i++) {
+    for (int i = 1; i < size; i++) {
         unsigned long cutPoint = cutPoints[i];
         //printf("slab %d starts at %lu\n", COMM_SLAB_START[i], cutPoint);
         for (unsigned long s = 0; s < cutPoint; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) < COMM_SLAB_START[i]);
@@ -146,7 +151,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < size; i++) res += num_Particles_toSend[i];
     assert(res == (iEnd - iStart));
 
-   /* 
+    /*
     printf("rank%d sent:", my_rank);
     for (int i = 0; i < size; i++) {
         printf(" %lu,", num_Particles_toSend[i]);
@@ -168,7 +173,7 @@ int main(int argc, char *argv[]) {
     unsigned long newSumCheck;
     MPI_Allreduce(&new_num_Particle, &newSumCheck, 1, MPI_UNSIGNED_LONG, MPI_SUM, MPI_COMM_WORLD);
     assert(newSumCheck == N);
-
+    printf("new Sum assertation done.\n");
 
 
     
@@ -181,8 +186,10 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < size; i++) {
 	MPISendCount[i] = static_cast<int>(num_Particles_toSend[i] * 3);
 	MPIRecvCount[i] = static_cast<int>(num_Particles_toRecv[i] * 3);
+	assert(MPISendCount[i] > 0);
+	assert(MPIRecvCount[i] > 0);
 	}
-
+    
     int* MPISendoffset = new int[size];
     MPISendoffset[0] = 0;
     for (int i = 1; i < size; i++) MPISendoffset[i] = MPISendoffset[i-1] + MPISendCount[i-1];
@@ -192,7 +199,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    /*
+    /*  
     printf("rank%d sendCount: ", my_rank);
     for (int i = 0; i < size; i++) printf("%d, ", MPISendCount[i]);
     printf("\n rank%d  sendoffset: ", my_rank);
@@ -203,6 +210,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < size; i++) printf("%d, ", MPIRecvoffset[i]);
     printf("\n");
     */
+
     MPI_Alltoallv(r.data(), MPISendCount, MPISendoffset, MPI_FLOAT, sorted_Particles, MPIRecvCount, MPIRecvoffset, MPI_FLOAT, MPI_COMM_WORLD);   
     delete [] MPISendoffset;
     delete [] MPIRecvoffset;
@@ -223,7 +231,7 @@ int main(int argc, char *argv[]) {
 
 
 
-    /*
+   /* 
     float* datawPadding = new (std::align_val_t(64)) float[nGrid * nGrid * (nGrid + 2)];
     M3fType gridwPadding(datawPadding, blitz::shape(nGrid, nGrid, nGrid+2), blitz::neverDeleteData);
     gridwPadding = 0.0;
