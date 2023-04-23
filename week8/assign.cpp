@@ -74,7 +74,7 @@ int main(int argc, char *argv[]) {
     }
 
     int size, my_rank;
-    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, nullptr);
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_SERIALIZED, nullptr);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
@@ -174,7 +174,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < size; i++) new_num_Particle += num_Particles_toRecv[i];
     
     int newSumCheck;
-    MPI_Allreduce(&new_num_Particle, &newSumCheck, 1, MPI_UNSIGNED_LONG, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&new_num_Particle, &newSumCheck, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     assert(newSumCheck == N);
     
     
@@ -229,30 +229,37 @@ int main(int argc, char *argv[]) {
     
 
 
-    /*
-    float* datawPadding = new (std::align_val_t(64)) float[nGrid * nGrid * (nGrid + 2)];
-    M3fType gridwPadding(datawPadding, blitz::shape(nGrid, nGrid, nGrid+2), blitz::neverDeleteData);
+    int firstDim = slab_size + massOption;
+    float* datawPadding = new (std::align_val_t(64)) float[firstDim * nGrid * (nGrid + 2)];
+    M3fType gridwPadding(datawPadding, blitz::shape(firstDim, nGrid, nGrid+2), blitz::neverDeleteData);
     gridwPadding = 0.0;
     M3fType grid = gridwPadding(blitz::Range::all(), blitz::Range::all(), blitz::Range(0, nGrid-1));
-    
+    grid = 0.0;    
     std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
-    M3cType kGrid(dataComplex, blitz::shape(nGrid, nGrid, nGrid / 2 + 1));
+    M3cType kGrid(dataComplex, blitz::shape(firstDim, nGrid, nGrid / 2 + 1));
     start = std::chrono::system_clock::now();
+    printf("rank%d firstDim:%d, %d\n", my_rank, grid.lbound(0), grid.ubound(0));
+    int uBound = (my_rank == size - 1) ? nGrid : COMM_SLAB_START[my_rank+1];
+    float upperBoundary = 1.0 / nGrid * uBound;
+    printf("rank%d, upperBoundary%f\n", my_rank, upperBoundary);
 
 #pragma omp parallel
 {
 #pragma omp for
-    for (int pn = iStart; pn < iEnd; pn++) {
-        float x = (r(pn, 0) + 0.5);
-        float y = (r(pn, 1) + 0.5);
-        float z = (r(pn, 2) + 0.5);
-        if (abs(x-1.0) < 0.0001) x -= 0.0001;
+    for (int pn = 0; pn < new_num_Particle; pn++) {
+        float x = (rSorted(pn, 0) + 0.5);
+        float y = (rSorted(pn, 1) + 0.5);
+        float z = (rSorted(pn, 2) + 0.5);
+	
+        if (abs(x-upperBoundary) < 0.0001) x -= 0.0001;
         if (abs(y-1.0) < 0.0001) y -= 0.0001;
         if (abs(z-1.0) < 0.0001) z -= 0.0001;
 	x *= nGrid;
+	x -= COMM_SLAB_START[my_rank];
 	y *= nGrid;
 	z *= nGrid;
-        assert(x >= 0 && x < nGrid);
+        assert(x >= grid.lbound(0));
+        assert(static_cast<int>(std::floor(x)) <= grid.ubound(0));
         assert(y >= 0 && y < nGrid);
         assert(z >= 0 && z < nGrid);
         assignMass(x, y, z, nGrid, grid);
@@ -264,33 +271,17 @@ int main(int argc, char *argv[]) {
     duration = end - start;
     printf("Mass assignment took: %.8f s\n", duration);
     
-    if (my_rank == 0) {
-        MPI_Reduce(MPI_IN_PLACE, gridwPadding.data(), gridwPadding.size(), MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
-    }
-    else {
-        MPI_Reduce(gridwPadding.data(), nullptr, gridwPadding.size(), MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
-    }
 
     
-   
-    M2fType projected(nGrid, nGrid);
-    projected = 0.0;
+    float blitzSum = blitz::sum(grid);
     
-    start = std::chrono::system_clock::now();
-    blitz::thirdIndex k;
-    projected = blitz::max(grid, k);
-    end = std::chrono::system_clock::now();
-    duration = end - start;
-    printf("Projection took: %.8f s\n", duration);
+    float average_density = blitzSum / (firstDim * nGrid * nGrid);
+    printf("average_density = %f\n", average_density);
     
-    if (my_rank == 0) {
-        float blitzSum = blitz::sum(grid);
-    	printf("totalSum = %f, ", blitzSum);
-    	float average_density = blitzSum / (nGrid * nGrid * nGrid);
-    	printf("average_density = %f\n", average_density);
-    	grid -= average_density;
-    	grid /= average_density;
-	printf("overall_density = %f\n", blitz::sum(grid));
+    grid -= average_density;
+    grid /= average_density;
+    printf("overall_density = %f\n", blitz::sum(grid));
+    /*
         start = std::chrono::system_clock::now();
    	fftwf_plan plan = fftwf_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, (fftwf_complex *)dataComplex, FFTW_ESTIMATE);
         fftwf_execute(plan);
@@ -298,11 +289,11 @@ int main(int argc, char *argv[]) {
     	end = std::chrono::system_clock::now();
     	duration = end - start;
     	printf("FFT took: %.8f s\n", duration);
-	
-    }
+*/	
+    
     
     delete [] datawPadding;
-    */
+    
     delete [] sorted_Particles;
     delete [] cutPoints;
     delete [] COMM_SLAB_SIZE;
