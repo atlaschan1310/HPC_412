@@ -80,6 +80,8 @@ int main(int argc, char *argv[]) {
 
     ptrdiff_t alloc_local, slab_size, slab_start_index;
     fftw_mpi_init();
+
+    //determine slab size and offset in x-axis
     alloc_local = fftw_mpi_local_size_3d(nGrid, nGrid, nGrid, MPI_COMM_WORLD, &slab_size, &slab_start_index);
     assert(slab_size > 0);
     printf("Rank%d: slab_size = %d, slab starts at %d\n", my_rank, slab_size, slab_start_index);
@@ -111,7 +113,7 @@ int main(int argc, char *argv[]) {
     int iEnd = (my_rank == size - 1) ? N : (my_rank + 1) * nPer;
     assert(iStart < N);
     assert(iEnd <= N);
-    
+    // range: [iStart, iEnd)
     printf("rank:%d, range:(%d, %d)\n", my_rank, iStart, iEnd);
     M2fType r(blitz::Range(iStart, iEnd - 1), blitz::Range(0,2));
     timePointType start = std::chrono::system_clock::now();
@@ -122,6 +124,15 @@ int main(int argc, char *argv[]) {
     
     coord_Type* coord = reinterpret_cast<coord_Type*>(r.data());
     
+    /*
+      |______________|____________|_____________|___________|_____________|
+      ^   rank0      ^    rank1   ^    rank2    ^   rank3   ^   rankN     ^
+      0         cutPoints[1] cutPoints[2]  cutPoints[3] cutPoints[N]   iEnd - iStart
+
+      Use partition func to determine the first point with greater grid Index COMM_SLAB_START[i]
+     */
+
+
     int* cutPoints = new int[size+1];
     cutPoints[0] = 0;
     cutPoints[size] = iEnd - iStart;
@@ -133,12 +144,12 @@ int main(int argc, char *argv[]) {
            cutPoints[i] = cutPoint;
     }
 
-    
+    // check if ascending
     for (int i = 1; i < size + 1; i++) {
         assert(cutPoints[i-1] <= cutPoints[i]);
 	}
    
-
+    //check points in range has corresponding gridIndex
     curStart = 0;
     for (int i = 1; i < size; i++) {
         int cutPoint = cutPoints[i];
@@ -146,11 +157,11 @@ int main(int argc, char *argv[]) {
         for (int s = 0; s < cutPoint; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) < COMM_SLAB_START[i]);
         for (int s = cutPoint; s < iEnd - iStart; s++) assert(std::floor((coord[s][0] + 0.5) * nGrid) >= COMM_SLAB_START[i]);
     }
-    
+    // difference cutPoint -> number of particles to send to each rank
     int* num_Particles_toSend = new int[size];
     int* num_Particles_toRecv = new int[size];
     for (int i = 0; i < size; i++) num_Particles_toSend[i] = cutPoints[i+1] - cutPoints[i];
-   
+    // check sum of particles to send == #particles loaded
     int res = 0;
     for (int i = 0; i < size; i++) res += num_Particles_toSend[i];
     assert(res == (iEnd - iStart));
@@ -161,6 +172,7 @@ int main(int argc, char *argv[]) {
         }
     printf("\n");
     */
+    //broadcast num_particles to send to all ranks
     MPI_Alltoall(num_Particles_toSend, 1, MPI_INT, num_Particles_toRecv, 1, MPI_INT, MPI_COMM_WORLD);
     /*
     printf("rank%d received:", my_rank);
@@ -169,15 +181,15 @@ int main(int argc, char *argv[]) {
 	}
     printf("\n");
     */
-
+    // determine total particles received by all ranks
     int new_num_Particle = 0;
     for (int i = 0; i < size; i++) new_num_Particle += num_Particles_toRecv[i];
-    
+    // check if all particles have been sent
     int newSumCheck;
     MPI_Allreduce(&new_num_Particle, &newSumCheck, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     assert(newSumCheck == N);
     
-    
+    // calculate send Count and offset in quatity of float numbers
     float* sorted_Particles = new float[new_num_Particle * 3];
     int* MPISendCount = new int[size];
     int* MPIRecvCount = new int[size];
@@ -208,7 +220,7 @@ int main(int argc, char *argv[]) {
     for (int i = 0; i < size; i++) printf("%d, ", MPIRecvoffset[i]);
     printf("\n");
     */
-
+    // send particles to corresponding ranks
     MPI_Alltoallv(r.data(), MPISendCount, MPISendoffset, MPI_FLOAT, sorted_Particles, MPIRecvCount, MPIRecvoffset, MPI_FLOAT, MPI_COMM_WORLD);   
     delete [] MPISendoffset;
     delete [] MPIRecvoffset;
@@ -218,8 +230,9 @@ int main(int argc, char *argv[]) {
     delete [] num_Particles_toSend;
     delete [] num_Particles_toRecv;
 
-    
+    // rSorted stores the particles that belongs to the rank in physical space (put float* in)
     M2fType rSorted(sorted_Particles, blitz::shape(new_num_Particle, 3), blitz::neverDeleteData);
+    // check if slab index is correct
     for (int i = 0; i < new_num_Particle; i++) {
 	    int curSlab = std::floor((rSorted(i,0) + 0.5) * nGrid);
 	    if (my_rank < size - 1) assert(curSlab < COMM_SLAB_START[my_rank + 1]);
@@ -228,7 +241,12 @@ int main(int argc, char *argv[]) {
     printf("rank%d has %lu sorted particles ready for mass assignment\n", my_rank, new_num_Particle);   
     
 
-
+    /*
+     massOption = 0:NGP; 1:CIC; 2:TSC; 3:PCS
+     size of x (firstDim) = slab_size(fftw_mpi_localsize) + padding(massOption)
+     padded grid size for massAssignment: firstDim * nGrid * (nGrid + 2)
+     padded grid index: [0, firstDim) x [0, nGrid) * [0, nGrid+2)
+     */
     int firstDim = slab_size + massOption;
     float* datawPadding = new (std::align_val_t(64)) float[firstDim * nGrid * (nGrid + 2)];
     M3fType gridwPadding(datawPadding, blitz::shape(firstDim, nGrid, nGrid+2), blitz::neverDeleteData);
@@ -238,11 +256,13 @@ int main(int argc, char *argv[]) {
     std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
     M3cType kGrid(dataComplex, blitz::shape(firstDim, nGrid, nGrid / 2 + 1));
     start = std::chrono::system_clock::now();
+
     printf("rank%d firstDim:%d, %d\n", my_rank, grid.lbound(0), grid.ubound(0));
     int uBound = (my_rank == size - 1) ? nGrid : COMM_SLAB_START[my_rank+1];
+    // upperBoundary = the physical wall in x-axis that cuts the slab
     float upperBoundary = 1.0 / nGrid * uBound;
     printf("rank%d, upperBoundary%f\n", my_rank, upperBoundary);
-
+// mass Assignment  
 #pragma omp parallel
 {
 #pragma omp for
@@ -250,12 +270,14 @@ int main(int argc, char *argv[]) {
         float x = (rSorted(pn, 0) + 0.5);
         float y = (rSorted(pn, 1) + 0.5);
         float z = (rSorted(pn, 2) + 0.5);
-	
+	// if too close to the boudary, adjust
         if (abs(x-upperBoundary) < 0.0001) x -= 0.0001;
         if (abs(y-1.0) < 0.0001) y -= 0.0001;
         if (abs(z-1.0) < 0.0001) z -= 0.0001;
+        // adjust x-axis gridIndex of particle to [0, slab_size)
 	x *= nGrid;
 	x -= COMM_SLAB_START[my_rank];
+
 	y *= nGrid;
 	z *= nGrid;
         assert(x >= grid.lbound(0));
@@ -272,24 +294,28 @@ int main(int argc, char *argv[]) {
     printf("Mass assignment took: %.8f s\n", duration);
     
 
-    
+    // calculate over density
     float blitzSum = blitz::sum(grid);
-    
     float average_density = blitzSum / (firstDim * nGrid * nGrid);
     printf("average_density = %f\n", average_density);
     
     grid -= average_density;
     grid /= average_density;
     printf("overall_density = %f\n", blitz::sum(grid));
-    /*
+    
         start = std::chrono::system_clock::now();
-   	fftwf_plan plan = fftwf_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, (fftwf_complex *)dataComplex, FFTW_ESTIMATE);
+	//does not work with inplace fftw (double free or corruption (!prev))
+   	//fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, (fftwf_complex *)dataComplex,MPI_COMM_WORLD, FFTW_ESTIMATE);
+        
+	// works with complex data allocated by fftw_alloc_complex but much slower than non-mpi fftw calls
+	fftwf_complex* fftw_complex_data;
+	fftw_complex_data = fftwf_alloc_complex(alloc_local);
+	fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, grid.data(), fftw_complex_data,MPI_COMM_WORLD, FFTW_ESTIMATE);
         fftwf_execute(plan);
         fftwf_destroy_plan(plan);
     	end = std::chrono::system_clock::now();
     	duration = end - start;
-    	printf("FFT took: %.8f s\n", duration);
-*/	
+    	printf("FFT took: %.8f s\n", duration);	
     
     
     delete [] datawPadding;
