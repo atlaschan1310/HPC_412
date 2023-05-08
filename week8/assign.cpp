@@ -29,13 +29,13 @@ typedef typename blitz::Array<float, 3> M3fType;
 typedef typename blitz::Array<float, 2> M2fType;
 typedef typename blitz::Array<std::complex<float>, 3> M3cType;
 
-void NGP(float, float, float, int, M3fType&);
-void CIC(float, float, float, int, M3fType&);
-void TSC(float, float, float, int, M3fType&);
-void PCS(float, float, float, int, M3fType&);
+void NGP(float, float, float, int, int, M3fType&);
+void CIC(float, float, float, int, int, M3fType&);
+void TSC(float, float, float, int, int, M3fType&);
+void PCS(float, float, float, int, int, M3fType&);
 void outPut(const char*, int, const M2fType&);
 void func();
-float PCS_return(float, float, float, int, M3fType&);
+float PCS_return(float, float, float, int, int, M3fType&);
 
 void swapCoord(coord_Type*, int, int);
 int partition(coord_Type*, int, int, int, int);
@@ -55,7 +55,7 @@ int main(int argc, char *argv[]) {
     int massOption;
     int nGrid = atoi(argv[2]);
     massOption = atoi(argv[3]);
-    void (*assignMass) (float, float, float, int, M3fType&);
+    void (*assignMass) (float, float, float, int, int, M3fType&);
     if (massOption == 0) {
         printf("Nearest Grid Point.\n");
         assignMass = &NGP;
@@ -74,7 +74,7 @@ int main(int argc, char *argv[]) {
     }
 
     int size, my_rank;
-    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_SERIALIZED, nullptr);
+    MPI_Init_thread(nullptr, nullptr, MPI_THREAD_FUNNELED, nullptr);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
     MPI_Comm_rank(MPI_COMM_WORLD, &my_rank);
 
@@ -243,25 +243,39 @@ int main(int argc, char *argv[]) {
 
     /*
      massOption = 0:NGP; 1:CIC; 2:TSC; 3:PCS
-     size of x (firstDim) = slab_size(fftw_mpi_localsize) + padding(massOption)
+     padding = 0:NGP; 2:CIC; 2:TSC; 4:PCS
+     size of x (firstDim) = slab_size(fftw_mpi_localsize) + xPadding
      padded grid size for massAssignment: firstDim * nGrid * (nGrid + 2)
      padded grid index: [0, firstDim) x [0, nGrid) * [0, nGrid+2)
      */
-    int firstDim = slab_size + massOption;
+    int xPadding = 0;
+    int xOffset = 0;
+    if (massOption == 1 || massOption == 2) {
+	xPadding = 2;
+	xOffset = 1;
+    }
+    else if (massOption == 3) {
+	xPadding = 4;
+	xOffset = 2;
+    }
+    int firstDim = slab_size + xPadding;
     float* datawPadding = new (std::align_val_t(64)) float[firstDim * nGrid * (nGrid + 2)];
     M3fType gridwPadding(datawPadding, blitz::shape(firstDim, nGrid, nGrid+2), blitz::neverDeleteData);
     gridwPadding = 0.0;
     M3fType grid = gridwPadding(blitz::Range::all(), blitz::Range::all(), blitz::Range(0, nGrid-1));
-    grid = 0.0;    
-    std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
-    M3cType kGrid(dataComplex, blitz::shape(firstDim, nGrid, nGrid / 2 + 1));
+    M3fType paddingU = grid(blitz::Range(0, xOffset - 1), blitz::Range::all(), blitz::Range::all());
+    M3fType paddingD = grid(blitz::Range(xOffset + slab_size, firstDim - 1), blitz::Range::all(), blitz::Range::all());
+    
+    //std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
+   //M3cType kGrid(dataComplex, blitz::shape(firstDim, nGrid, nGrid / 2 + 1));
     start = std::chrono::system_clock::now();
 
-    printf("rank%d firstDim:%d, %d\n", my_rank, grid.lbound(0), grid.ubound(0));
+    printf("rank%d pU:%d, %d, pD:%d, %d\n", my_rank, 0, xOffset - 1, xOffset + slab_size, slab_size + xPadding - 1);
     int uBound = (my_rank == size - 1) ? nGrid : COMM_SLAB_START[my_rank+1];
     // upperBoundary = the physical wall in x-axis that cuts the slab
     float upperBoundary = 1.0 / nGrid * uBound;
     printf("rank%d, upperBoundary%f\n", my_rank, upperBoundary);
+
 // mass Assignment  
 #pragma omp parallel
 {
@@ -274,17 +288,17 @@ int main(int argc, char *argv[]) {
         if (abs(x-upperBoundary) < 0.0001) x -= 0.0001;
         if (abs(y-1.0) < 0.0001) y -= 0.0001;
         if (abs(z-1.0) < 0.0001) z -= 0.0001;
-        // adjust x-axis gridIndex of particle to [0, slab_size)
+        // adjust x-axis gridIndex of particle to [xOffset, xOffset+slab_size-1]
 	x *= nGrid;
 	x -= COMM_SLAB_START[my_rank];
-
+        x += xOffset;
 	y *= nGrid;
 	z *= nGrid;
-        assert(x >= grid.lbound(0));
-        assert(static_cast<int>(std::floor(x)) <= grid.ubound(0));
+        assert(x >= grid.lbound(0) + xOffset);
+        assert(static_cast<int>(std::floor(x)) <= grid.ubound(0)-xOffset);
         assert(y >= 0 && y < nGrid);
         assert(z >= 0 && z < nGrid);
-        assignMass(x, y, z, nGrid, grid);
+        assignMass(x, y, z, nGrid, grid.ubound(0), grid);
     }
     
 }
@@ -293,39 +307,104 @@ int main(int argc, char *argv[]) {
     duration = end - start;
     printf("Mass assignment took: %.8f s\n", duration);
     
+    int sendCount = xOffset * nGrid * nGrid;
+//ghost region communication 
+    if (massOption > 0) {
+        int color1 = my_rank / 2;
+	int key1 = my_rank & 1;
+	int color2 = ((my_rank - 1 + size) % size) / 2;
+	int key2 = !(my_rank & 1);
+	int color3 = MPI_UNDEFINED;
+	int key3;
+	if (size % 2) {
+	    if (my_rank == 0) {
+	        color2 = MPI_UNDEFINED;
+		color3 = 0;
+		key3 = 0;
+	    }
+	    if (my_rank == size - 1) { 
+		color1 = MPI_UNDEFINED;
+		color3 = 0;
+		key3 = 1;
+	    }
+	}
+        printf("rank:%d, (c1,k1):(%d,%d), (c2,k2):(%d,%d)\n", my_rank, color1, key1, color2, key2);
 
+        MPI_Comm newcomm1, newcomm2, newcomm3;
+        MPI_Comm_split(MPI_COMM_WORLD, color1, key1, &newcomm1);
+	MPI_Comm_split(MPI_COMM_WORLD, color2, key2, &newcomm2);
+	MPI_Comm_split(MPI_COMM_WORLD, color3, key3, &newcomm3);
+	int size1, size2, size3, rank1, rank2, rank3;
+	
+	if (size % 2 == 0 || (my_rank !=0 && my_rank != size - 1)) {
+	    MPI_Comm_size(newcomm1, &size1);
+ 	    MPI_Comm_size(newcomm2, &size2);
+	    MPI_Comm_rank(newcomm1, &rank1);
+	    MPI_Comm_rank(newcomm2, &rank2);
+	    assert(size1 == 2 && size2 == 2);
+	    //printf("rank%d: %d, %d\n",my_rank, rank1, rank2);
+	}
+	
+	else {
+	    MPI_Comm_size(newcomm3, &size3);
+	    MPI_Comm_rank(newcomm3, &rank3);
+	    assert(size3 == 2);
+	    if (my_rank == 0) {
+	        MPI_Comm_size(newcomm1, &size1);
+		MPI_Comm_rank(newcomm1, &rank1);
+		assert(size1 == 2);
+		printf("rank0: %d, %d\n", rank1, rank3);
+	    }
+	    else {
+		MPI_Comm_size(newcomm2, &size2);
+		MPI_Comm_rank(newcomm2, &rank2);
+		assert(size2 == 2);
+		//printf("rank%d: %d, %d\n", size - 1, rank2, rank3);
+	    }
+	}
+
+
+        
+    }
+    
+    
+/*
     // calculate over density
     float blitzSum = blitz::sum(grid);
     float average_density = blitzSum / (firstDim * nGrid * nGrid);
+    printf("sum = %f, actualSize = %d\n",blitzSum, slab_size * nGrid * nGrid);
     printf("average_density = %f\n", average_density);
     
+    float massAssignmentCheck; 
+    MPI_Allreduce(&blitzSum, &massAssignmentCheck, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+    printf("massAssignmentCheck:%.8f\n", massAssignmentCheck);
+
     grid -= average_density;
     grid /= average_density;
     printf("overall_density = %f\n", blitz::sum(grid));
+
     
+
         start = std::chrono::system_clock::now();
 	//does not work with inplace fftw (double free or corruption (!prev))
    	//fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, (fftwf_complex *)dataComplex,MPI_COMM_WORLD, FFTW_ESTIMATE);
-        
 	// works with complex data allocated by fftw_alloc_complex but much slower than non-mpi fftw calls
 	fftwf_complex* fftw_complex_data;
 	fftw_complex_data = fftwf_alloc_complex(alloc_local);
-	fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, grid.data(), fftw_complex_data,MPI_COMM_WORLD, FFTW_ESTIMATE);
+	fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, fftw_complex_data,MPI_COMM_WORLD, FFTW_ESTIMATE);
         fftwf_execute(plan);
         fftwf_destroy_plan(plan);
     	end = std::chrono::system_clock::now();
     	duration = end - start;
     	printf("FFT took: %.8f s\n", duration);	
-    
-    
-    delete [] datawPadding;
-    
-    delete [] sorted_Particles;
+    */
     delete [] cutPoints;
     delete [] COMM_SLAB_SIZE;
     delete [] COMM_SLAB_START;
     delete [] SLAB2RANK;
     fftw_mpi_cleanup();
+    delete [] datawPadding;
+    delete [] sorted_Particles;
     MPI_Finalize();
     return 0;
 }
@@ -337,7 +416,7 @@ void func() {
 #endif
 }
 
-void NGP(float x, float y, float z, int nGrid, M3fType& grid) {
+void NGP(float x, float y, float z, int nGrid, int xGrid, M3fType& grid) {
 #pragma omp parallel
 {
     int i = std::floor(x);
@@ -348,7 +427,7 @@ void NGP(float x, float y, float z, int nGrid, M3fType& grid) {
 }
 }
 
-void CIC(float x, float y, float z, int nGrid, M3fType& grid) {
+void CIC(float x, float y, float z, int nGrid, int xGrid, M3fType& grid) {
 #pragma omp parallel
 {
     float Wx[2];
@@ -362,25 +441,25 @@ void CIC(float x, float y, float z, int nGrid, M3fType& grid) {
     for (int i = 0; i < 2; i++) {
         for (int j = 0; j < 2; j++) {
             for (int k = 0; k < 2; k++) {
-                int indexI = (ix + i + nGrid) % nGrid;
+                int indexI = ix + i;
                 int indexJ = (iy + j + nGrid) % nGrid;
                 int indexK = (iz + k + nGrid) % nGrid;
-                assert(indexI >= 0 && indexI < nGrid);
+                assert(indexI >= 0 && indexI <= xGrid);
                 assert(indexJ >= 0 && indexJ < nGrid);
                 assert(indexK >= 0 && indexK < nGrid);
                 float W = Wx[i] * Wy[j] * Wz[k];
 #pragma omp atomic
-                grid(indexI, indexJ, indexK) += W;
-                totalW += W;
+               grid(indexI, indexJ, indexK) += W;
+               totalW += W;
             }
         }
     }
-    assert(abs(totalW - 1.0) < 0.0001);
+   assert(abs(totalW - 1.0) < 0.0001);
 }
     
 }
 
-void TSC(float x, float y, float z, int nGrid, M3fType& grid) {
+void TSC(float x, float y, float z, int nGrid, int xGrid, M3fType& grid) {
 #pragma omp parallel
 {
     float Wx[3];
@@ -394,10 +473,10 @@ void TSC(float x, float y, float z, int nGrid, M3fType& grid) {
     for (int i = 0; i < 3; i++) {
         for (int j = 0; j < 3; j++) {
             for (int k = 0; k < 3; k++) {
-                int indexI = (ix + i + nGrid) % nGrid;
+                int indexI = ix + i;
                 int indexJ = (iy + j + nGrid) % nGrid;
                 int indexK = (iz + k + nGrid) % nGrid;
-                assert(indexI >= 0 && indexI < nGrid);
+                assert(indexI >= 0 && indexI <= xGrid);
                 assert(indexJ >= 0 && indexJ < nGrid);
                 assert(indexK >= 0 && indexK < nGrid);
                 float W = Wx[i] * Wy[j] * Wz[k];
@@ -412,7 +491,7 @@ void TSC(float x, float y, float z, int nGrid, M3fType& grid) {
     
 }
 
-void PCS(float x, float y, float z, int nGrid, M3fType& grid) {
+void PCS(float x, float y, float z, int nGrid, int xGrid, M3fType& grid) {
 #pragma omp parallel
 {
     float Wx[4];
@@ -426,10 +505,10 @@ void PCS(float x, float y, float z, int nGrid, M3fType& grid) {
     for (int i = 0; i < 4; i++) {
         for (int j = 0; j < 4; j++) {
             for (int k = 0; k < 4; k++) {
-                int indexI = (ix + i + nGrid) % nGrid;
+                int indexI = ix + i;
                 int indexJ = (iy + j + nGrid) % nGrid;
                 int indexK = (iz + k + nGrid) % nGrid;
-                assert(indexI >= 0 && indexI < nGrid);
+                assert(indexI >= 0 && indexI <= xGrid);
                 assert(indexJ >= 0 && indexJ < nGrid);
                 assert(indexK >= 0 && indexK < nGrid);
                 float W = Wx[i] * Wy[j] * Wz[k];
@@ -444,7 +523,7 @@ void PCS(float x, float y, float z, int nGrid, M3fType& grid) {
     
 }
 
-float PCS_return(float x, float y, float z, int nGrid, M3fType& grid) {
+float PCS_return(float x, float y, float z, int nGrid, int xGrid, M3fType& grid) {
     float Wx[4];
     float Wy[4];
     float Wz[4];
@@ -659,4 +738,5 @@ int partition(coord_Type* data, int leftIndex, int rightIndex, int slabIndex, in
     }
     return i;
 }
+
 
