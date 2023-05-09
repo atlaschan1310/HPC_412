@@ -266,6 +266,9 @@ int main(int argc, char *argv[]) {
     M3fType paddingU = grid(blitz::Range(0, xOffset - 1), blitz::Range::all(), blitz::Range::all());
     M3fType paddingD = grid(blitz::Range(xOffset + slab_size, firstDim - 1), blitz::Range::all(), blitz::Range::all());
     
+    M3fType gridwMass = grid(blitz::Range(xOffset, xOffset + slab_size - 1), blitz::Range::all(), blitz::Range::all());
+    M3fType gridFFT = gridwPadding(blitz::Range(xOffset, xOffset + slab_size - 1), blitz::Range::all(), blitz::Range::all());
+
     //std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
    //M3cType kGrid(dataComplex, blitz::shape(firstDim, nGrid, nGrid / 2 + 1));
     start = std::chrono::system_clock::now();
@@ -307,9 +310,9 @@ int main(int argc, char *argv[]) {
     duration = end - start;
     printf("Mass assignment took: %.8f s\n", duration);
     
-    int ghostSendCount = xOffset * nGrid * nGrid;
 //ghost region communication 
     if (massOption > 0) {
+	int ghostSendCount = xOffset * nGrid * nGrid;
         int color1 = my_rank / 2;
 	int key1 = my_rank & 1;
 	int color2 = ((my_rank - 1 + size) % size) / 2;
@@ -360,8 +363,7 @@ int main(int argc, char *argv[]) {
 		//printf("rank%d: %d, %d\n", size - 1, rank2, rank3);
 	    }
 	}
-	int testSend[2] = {my_rank, my_rank * 2};
-	int testRecv[2];
+
 	float* ghostDS = paddingD.data(); 
 	float* ghostUS = paddingU.data();
 	float* ghostDR = new float [ghostSendCount];
@@ -387,10 +389,21 @@ int main(int argc, char *argv[]) {
 	MPI_Irecv(ghostRecv2, ghostSendCount, MPI_FLOAT, neighbor2, tag2, newcomm2, &request2[1]);
 	MPI_Waitall(2, request2, MPI_STATUS_IGNORE);
 	//printf("com2: rank%d, send%f, recv%f\n", my_rank, ghostSend2[0], ghostRecv2[0]);
-	
 
-
-	
+        M3fType uRegion2Add = grid(blitz::Range(xOffset, xOffset * 2 - 1), blitz::Range::all(), blitz::Range::all());
+	M3fType dRegion2Add = grid(blitz::Range(slab_size, xOffset + slab_size - 1), blitz::Range::all(), blitz::Range::all());
+        M3fType uRegionAdd(ghostUR, blitz::shape(xOffset, nGrid, nGrid), blitz::neverDeleteData);
+	M3fType dRegionAdd(ghostDR, blitz::shape(xOffset, nGrid, nGrid), blitz::neverDeleteData);
+	uRegion2Add += uRegionAdd;
+	dRegion2Add += dRegionAdd;
+        
+	/*
+	float ghostDSSum = blitz::sum(paddingD);
+	float ghostUSSum = blitz::sum(paddingU);
+        float ghostDRSum = blitz::sum(dRegionAdd);
+	float ghostURSum = blitz::sum(uRegionAdd);
+	printf("rank%d DSend:%f, USend:%f, DRecv:%f, URecv:%f\n", my_rank, ghostDSSum, ghostUSSum, ghostDRSum, ghostURSum);
+	*/
 	
 	delete [] request2;
         delete [] request1;
@@ -400,10 +413,10 @@ int main(int argc, char *argv[]) {
     }
     
     
-/*
+
     // calculate over density
-    float blitzSum = blitz::sum(grid);
-    float average_density = blitzSum / (firstDim * nGrid * nGrid);
+    float blitzSum = blitz::sum(gridwMass);
+    float average_density = blitzSum / (slab_size * nGrid * nGrid);
     printf("sum = %f, actualSize = %d\n",blitzSum, slab_size * nGrid * nGrid);
     printf("average_density = %f\n", average_density);
     
@@ -411,11 +424,11 @@ int main(int argc, char *argv[]) {
     MPI_Allreduce(&blitzSum, &massAssignmentCheck, 1, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
     printf("massAssignmentCheck:%.8f\n", massAssignmentCheck);
 
-    grid -= average_density;
-    grid /= average_density;
-    printf("overall_density = %f\n", blitz::sum(grid));
+    gridwMass -= average_density;
+    gridwMass /= average_density;
+    printf("overall_density = %f\n", blitz::sum(gridwMass));
 
-    
+ 
 
         start = std::chrono::system_clock::now();
 	//does not work with inplace fftw (double free or corruption (!prev))
@@ -423,13 +436,13 @@ int main(int argc, char *argv[]) {
 	// works with complex data allocated by fftw_alloc_complex but much slower than non-mpi fftw calls
 	fftwf_complex* fftw_complex_data;
 	fftw_complex_data = fftwf_alloc_complex(alloc_local);
-	fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, fftw_complex_data,MPI_COMM_WORLD, FFTW_ESTIMATE);
+	fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, gridFFT.data(), fftw_complex_data,MPI_COMM_WORLD, FFTW_ESTIMATE);
         fftwf_execute(plan);
         fftwf_destroy_plan(plan);
     	end = std::chrono::system_clock::now();
     	duration = end - start;
     	printf("FFT took: %.8f s\n", duration);	
-    */
+    
     delete [] cutPoints;
     delete [] COMM_SLAB_SIZE;
     delete [] COMM_SLAB_START;
