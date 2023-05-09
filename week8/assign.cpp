@@ -307,7 +307,7 @@ int main(int argc, char *argv[]) {
     duration = end - start;
     printf("Mass assignment took: %.8f s\n", duration);
     
-    int sendCount = xOffset * nGrid * nGrid;
+    int ghostSendCount = xOffset * nGrid * nGrid;
 //ghost region communication 
     if (massOption > 0) {
         int color1 = my_rank / 2;
@@ -351,7 +351,7 @@ int main(int argc, char *argv[]) {
 	        MPI_Comm_size(newcomm1, &size1);
 		MPI_Comm_rank(newcomm1, &rank1);
 		assert(size1 == 2);
-		printf("rank0: %d, %d\n", rank1, rank3);
+		//printf("rank0: %d, %d\n", rank1, rank3);
 	    }
 	    else {
 		MPI_Comm_size(newcomm2, &size2);
@@ -362,15 +362,40 @@ int main(int argc, char *argv[]) {
 	}
 	int testSend[2] = {my_rank, my_rank * 2};
 	int testRecv[2];
+	float* ghostDS = paddingD.data(); 
+	float* ghostUS = paddingU.data();
+	float* ghostDR = new float [ghostSendCount];
+	float* ghostUR = new float [ghostSendCount];
 	int tag1 = 42;
 	int neighbor1 = (rank1 == 0) ? 1 : 0;
-	MPI_Request* request = new MPI_Request[2];
-	MPI_Isend(&testSend, 2, MPI_INTEGER, neighbor1, tag1, newcomm1, &request[0]);
-	MPI_Irecv(&testRecv, 2, MPI_INTEGER, neighbor1, tag1, newcomm1, &request[1]);
-	MPI_Waitall(2, request, MPI_STATUS_IGNORE);
-        printf("rank%d, recv%d,%d\n",my_rank, testRecv[0], testRecv[1]);
-        delete [] request;
+        float* ghostSend1 = (rank1 == 0) ? ghostDS : ghostUS;
+	float* ghostRecv1 = (rank1 == 0) ? ghostDR : ghostUR;
 
+	MPI_Request* request1 = new MPI_Request[2];
+	MPI_Isend(ghostSend1, ghostSendCount, MPI_FLOAT, neighbor1, tag1, newcomm1, &request1[0]);
+	MPI_Irecv(ghostRecv1, ghostSendCount, MPI_FLOAT, neighbor1, tag1, newcomm1, &request1[1]);
+	MPI_Waitall(2, request1, MPI_STATUS_IGNORE);
+       //printf("com1: rank%d,send%f, recv%f\n",my_rank, ghostSend1[0], ghostRecv1[0]);
+	
+	int tag2 = 58;
+	int neighbor2 = (rank2 == 0) ? 1 : 0;
+        float* ghostSend2 = (rank2 == 0) ? ghostDS: ghostUS;
+	float* ghostRecv2 = (rank2 == 0) ? ghostDR : ghostUR;
+
+	MPI_Request* request2 = new MPI_Request[2];
+	MPI_Isend(ghostSend2, ghostSendCount, MPI_FLOAT, neighbor2, tag2, newcomm2, &request2[0]);
+	MPI_Irecv(ghostRecv2, ghostSendCount, MPI_FLOAT, neighbor2, tag2, newcomm2, &request2[1]);
+	MPI_Waitall(2, request2, MPI_STATUS_IGNORE);
+	//printf("com2: rank%d, send%f, recv%f\n", my_rank, ghostSend2[0], ghostRecv2[0]);
+	
+
+
+	
+	
+	delete [] request2;
+        delete [] request1;
+        delete [] ghostDR;
+	delete [] ghostUR;
         
     }
     
