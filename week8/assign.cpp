@@ -323,8 +323,6 @@ int main(int argc, char *argv[]) {
 		key3 = 0;
 	    }
 	    if (my_rank == size - 1) { 
-		color1 = MPI_UNDEFINED;
-		color3 = 0;
 		key3 = 1;
 	    }
 	}
@@ -342,7 +340,7 @@ int main(int argc, char *argv[]) {
 	    MPI_Comm_rank(newcomm1, &rank1);
 	    MPI_Comm_rank(newcomm2, &rank2);
 	    assert(size1 == 2 && size2 == 2);
-	    //printf("rank%d: %d, %d\n",my_rank, rank1, rank2);
+	    printf("rank%d: %d, %d\n",my_rank, rank1, rank2);
 	}
 	
 	else {
@@ -362,7 +360,16 @@ int main(int argc, char *argv[]) {
 		//printf("rank%d: %d, %d\n", size - 1, rank2, rank3);
 	    }
 	}
-
+	int testSend[2] = {my_rank, my_rank * 2};
+	int testRecv[2];
+	int tag1 = 42;
+	int neighbor1 = (rank1 == 0) ? 1 : 0;
+	MPI_Request* request = new MPI_Request[2];
+	MPI_Isend(&testSend, 2, MPI_INTEGER, neighbor1, tag1, newcomm1, &request[0]);
+	MPI_Irecv(&testRecv, 2, MPI_INTEGER, neighbor1, tag1, newcomm1, &request[1]);
+	MPI_Waitall(2, request, MPI_STATUS_IGNORE);
+        printf("rank%d, recv%d,%d\n",my_rank, testRecv[0], testRecv[1]);
+        delete [] request;
 
         
     }
