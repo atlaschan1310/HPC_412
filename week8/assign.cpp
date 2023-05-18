@@ -265,12 +265,12 @@ int main(int argc, char *argv[]) {
     M3fType grid = gridwPadding(blitz::Range::all(), blitz::Range::all(), blitz::Range(0, nGrid-1));
     M3fType paddingU = grid(blitz::Range(0, xOffset - 1), blitz::Range::all(), blitz::Range::all());
     M3fType paddingD = grid(blitz::Range(xOffset + slab_size, firstDim - 1), blitz::Range::all(), blitz::Range::all());
-    
+    //without ghost region and z padding
     M3fType gridwMass = grid(blitz::Range(xOffset, xOffset + slab_size - 1), blitz::Range::all(), blitz::Range::all());
+    //without ghost but with z padding used for FFT
     M3fType gridFFT = gridwPadding(blitz::Range(xOffset, xOffset + slab_size - 1), blitz::Range::all(), blitz::Range::all());
-
-    //std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(datawPadding);
-   //M3cType kGrid(dataComplex, blitz::shape(firstDim, nGrid, nGrid / 2 + 1));
+    std::complex<float>* dataComplex = reinterpret_cast<std::complex<float>*>(gridFFT.data());
+    M3cType kGrid(dataComplex, blitz::shape(slab_size, nGrid, nGrid / 2 + 1));
     start = std::chrono::system_clock::now();
 
     printf("rank%d pU:%d, %d, pD:%d, %d\n", my_rank, 0, xOffset - 1, xOffset + slab_size, slab_size + xPadding - 1);
@@ -430,18 +430,14 @@ int main(int argc, char *argv[]) {
 
  
 
-        start = std::chrono::system_clock::now();
-	//does not work with inplace fftw (double free or corruption (!prev))
-   	//fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, datawPadding, (fftwf_complex *)dataComplex,MPI_COMM_WORLD, FFTW_ESTIMATE);
-	// works with complex data allocated by fftw_alloc_complex but much slower than non-mpi fftw calls
-	fftwf_complex* fftw_complex_data;
-	fftw_complex_data = fftwf_alloc_complex(alloc_local);
-	fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, gridFFT.data(), fftw_complex_data,MPI_COMM_WORLD, FFTW_ESTIMATE);
-        fftwf_execute(plan);
-        fftwf_destroy_plan(plan);
-    	end = std::chrono::system_clock::now();
-    	duration = end - start;
-    	printf("FFT took: %.8f s\n", duration);	
+    start = std::chrono::system_clock::now();
+    fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, gridFFT.data(), (fftwf_complex *)dataComplex,MPI_COMM_WORLD, FFTW_ESTIMATE);
+    fftwf_execute(plan);
+    fftwf_destroy_plan(plan);
+    end = std::chrono::system_clock::now();
+    duration = end - start;
+    printf("FFT took: %.8f s\n", duration);	
+
     
     delete [] cutPoints;
     delete [] COMM_SLAB_SIZE;
