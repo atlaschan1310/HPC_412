@@ -428,8 +428,8 @@ int main(int argc, char *argv[]) {
     gridwMass /= average_density;
     printf("overall_density = %f\n", blitz::sum(gridwMass));
 
- 
-
+     
+    //fft
     start = std::chrono::system_clock::now();
     fftwf_plan plan = fftwf_mpi_plan_dft_r2c_3d(nGrid, nGrid, nGrid, gridFFT.data(), (fftwf_complex *)dataComplex,MPI_COMM_WORLD, FFTW_ESTIMATE);
     fftwf_execute(plan);
@@ -437,7 +437,67 @@ int main(int argc, char *argv[]) {
     end = std::chrono::system_clock::now();
     duration = end - start;
     printf("FFT took: %.8f s\n", duration);	
+    //binning
+    int nBins = static_cast<int>(std::floor(0.8 * nGrid));
+    printf("Variable binning with nBins:%d\n", nBins);
+    blitz::Array<int, 1> nPower(nBins);
+    blitz::Array<float, 1> fPower(nBins);
+    nPower = 0;
+    fPower = 0.0;
+    int maxBin = std::floor(std::sqrt(3) * nGrid / 2.0);
+    for (int i = 0; i < slab_size; i++) {
+	    int adjustedXIndex = i + slab_start_index;
+            int kx = (adjustedXIndex <= nGrid/2) ? adjustedXIndex : -nGrid + adjustedXIndex;
+            for (int j = 0; j < nGrid; j++) {
+                    int ky = (j <= nGrid/2) ? j : -nGrid + j;
+                    for (int k = 0; k < (nGrid / 2 + 1); k++) {
+                            int kz = k;
+                            double kf = std::sqrt(kx * kx + ky * ky + kz * kz);
+                            int kIndex = std::floor(kf / maxBin * nBins);
+                            if (kf / maxBin >= 1) kIndex--;
 
+                            assert(kIndex < nBins);
+                            nPower(kIndex)++;
+                            fPower(kIndex) += std::norm(kGrid(i, j, k));
+                            //printf("kf:%f, kIndex:%d, power:%f\n",kf, kIndex, std::norm(kGrid(i, j, k)));
+                        }
+            }
+
+    }
+
+    if (my_rank == 0) {
+        MPI_Reduce(MPI_IN_PLACE, nPower.data(), nBins, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
+    else {
+        MPI_Reduce(nPower.data(), nullptr, nBins, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
+
+    if (my_rank == 0) {
+        MPI_Reduce(MPI_IN_PLACE, fPower.data(), nBins, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
+    else {
+        MPI_Reduce(fPower.data(), nullptr, nBins, MPI_FLOAT, MPI_SUM, 0, MPI_COMM_WORLD);
+    }
+    
+    
+    if (my_rank == 0) {
+        for (int i = 0; i < nBins; i++) {
+            if (nPower(i)) fPower(i) /= nPower(i);
+        }
+	std::string fileName = "Variable";
+        fileName += "_";
+        fileName += std::to_string(nGrid);
+        fileName += "_";
+        fileName += std::to_string(nBins);
+        fileName += "mpiALL.txt";
+        std::ofstream fout(fileName.c_str());
+        if (fout.is_open()) {
+            for (int i = 0; i < nBins; i++) {
+                    fout << fPower(i) << std::endl;
+                }
+        }
+    }
+    
     
     delete [] cutPoints;
     delete [] COMM_SLAB_SIZE;
