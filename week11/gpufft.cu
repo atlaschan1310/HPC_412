@@ -129,6 +129,12 @@ void* allocate_cuda_size(size_t size) {
     return cuda_data;
 }
 
+void* allocate_cuda_size_Stream(size_t size, cudaStream_t* stream) {
+    void* cuda_data;
+    cudaMallocAsync((void **)&cuda_data, size, *stream);
+    return cuda_data;
+}
+
 void destroy_cuda_data(void* data) {
     cudaFree(data);
 }

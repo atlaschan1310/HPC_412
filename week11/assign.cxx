@@ -361,7 +361,6 @@ int main(int argc, char *argv[])
     auto alloc_data = fftwf_alloc_complex(alloc_local);
 
     // Allocate a slab on the GPU
-    auto cuda_slab = allocate_cuda_slab(nGrid);
 
     float *data = reinterpret_cast<float *>(alloc_data);
     blitz::GeneralArrayStorage<3> storage;
@@ -541,18 +540,24 @@ int main(int argc, char *argv[])
                   inembed, istride, idist,
                   onembed, ostride, odist,
                   CUFFT_R2C, howmany, &workSize);
-    void* workArea = allocate_cuda_size(workSize);
-    cudaStream_t stream;
-    cudaStreamCreate(&stream);
-    void* cuda_slab_Stream = allocate_cuda_slab_Stream(nGrid, &stream);
+    
+    stream_info streams[3];
+    for (int i = 0; i < 3; i++) {
+	cudaStreamCreate(streams[i].stream);
+        streams[i].slab_gpu = allocate_cuda_slab_Stream(nGrid, streams[i].stream);
+	streams[i].work_gpu = allocate_cuda_size_Stream(workSize, streams[i].stream);
+    }
+    
     for (int i = grid_start; i <= grid_end - order; i++)
     {
         blitz::Array<float, 2> slab = grid(i, blitz::Range::all(), blitz::Range::all());
-        compute_fft_2D_R2C_Stream(slab, cuda_slab_Stream, &plan, workArea, &stream);
+        int numStream = i % 3;
+	compute_fft_2D_R2C_Stream(slab, streams[numStream].slab_gpu, &plan, streams[numStream].work_gpu, streams[numStream].stream);
     }
-    destroy_cuda_data(workArea);
-    destroy_cuda_data_Stream(cuda_slab_Stream, &stream);
-    destroy_cuda_data(cuda_slab);
+    for (int i = 0; i < 3; i++) {
+        destroy_cuda_data_Stream(streams[i].slab_gpu, streams[i].stream);
+	destroy_cuda_data_Stream(streams[i].work_gpu, streams[i].stream);
+    }
     cufftDestroy(plan);
     printf("[Rank %d] Finish 1D\n", i_rank);
     diff_load = std::chrono::high_resolution_clock::now() - start_time;
