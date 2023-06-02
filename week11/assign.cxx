@@ -207,7 +207,7 @@ bool compare_particles(const particle &a, const particle &b)
 struct stream_info {
     void* slab_gpu;
     void* work_gpu;
-    cudaStream_t* stream;
+    cudaStream_t stream;
 };
 
 
@@ -541,23 +541,26 @@ int main(int argc, char *argv[])
                   onembed, ostride, odist,
                   CUFFT_R2C, howmany, &workSize);
     
-    stream_info streams[3];
+    stream_info* streams = new stream_info[3];
     for (int i = 0; i < 3; i++) {
-	cudaStreamCreate(streams[i].stream);
-        streams[i].slab_gpu = allocate_cuda_slab_Stream(nGrid, streams[i].stream);
-	streams[i].work_gpu = allocate_cuda_size_Stream(workSize, streams[i].stream);
+	cudaStreamCreate(&streams[i].stream);
+        streams[i].slab_gpu = allocate_cuda_slab_Stream(nGrid, &streams[i].stream);
+	streams[i].work_gpu = allocate_cuda_size_Stream(workSize, &streams[i].stream);
     }
-    
+   
     for (int i = grid_start; i <= grid_end - order; i++)
     {
         blitz::Array<float, 2> slab = grid(i, blitz::Range::all(), blitz::Range::all());
         int numStream = i % 3;
-	compute_fft_2D_R2C_Stream(slab, streams[numStream].slab_gpu, &plan, streams[numStream].work_gpu, streams[numStream].stream);
+	compute_fft_2D_R2C_Stream(slab, streams[numStream].slab_gpu, &plan, streams[numStream].work_gpu, &streams[numStream].stream);
     }
+
     for (int i = 0; i < 3; i++) {
-        destroy_cuda_data_Stream(streams[i].slab_gpu, streams[i].stream);
-	destroy_cuda_data_Stream(streams[i].work_gpu, streams[i].stream);
+        destroy_cuda_data_Stream(streams[i].slab_gpu, &streams[i].stream);
+	destroy_cuda_data_Stream(streams[i].work_gpu, &streams[i].stream);
     }
+
+    delete [] streams;
     cufftDestroy(plan);
     printf("[Rank %d] Finish 1D\n", i_rank);
     diff_load = std::chrono::high_resolution_clock::now() - start_time;
